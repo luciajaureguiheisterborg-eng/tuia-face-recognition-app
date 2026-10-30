@@ -239,7 +239,7 @@ Se compararon dos modelos sobre los mismos conjuntos de datos (ver `2-train.ipyn
 
 **Modelo elegido: ArcFace (B).** Es mucho más preciso y generaliza a personas que no vio en el entrenamiento. El costo es un modelo más pesado y más lento, que es aceptable para esta aplicación. La CNN propia, entrenada con unas 2.000 imágenes de 43 personas, no logra la misma separación entre identidades.
 
-**Umbral de similitud:** `τ = 0,328`, elegido con las parejas de **validación** (open-set de validación + desconocidos de validación) para un FPIR ≤ 1%, y verificado después en test. Con ese umbral, ArcFace identifica correctamente al 100% de las personas registradas y rechaza al 99,5% de los desconocidos.
+**Umbral de similitud:** `τ = 0,328`, calibrado en validación con consultas de identificación (closed-set de validación + 195 desconocidos de validación) para aceptar como mucho el 1% de los desconocidos (FPIR ≤ 1%), y verificado después en test. Con ese umbral, ArcFace identifica correctamente al 100% de las personas registradas y rechaza al 99,5% de los desconocidos.
 
 **Análisis de errores (FP/FN):** los errores de la CNN son confusiones entre personas de aspecto parecido (mismo género, edad y rasgos). Las mujeres son solo el 11,4% de las consultas de test, reflejo del desbalance del dataset; por eso se analizaron los errores por género. El detalle está en `2-train.ipynb`.
 
