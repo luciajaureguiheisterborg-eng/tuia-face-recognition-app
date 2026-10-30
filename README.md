@@ -258,7 +258,6 @@ Se compararon dos modelos sobre los mismos conjuntos de datos (ver `2-train.ipyn
 - **Particiones (70/15/15):** *closed-set* (por foto, estratificado por identidad) y *open-set* (por identidad: 43 / 9 / 10 personas). Además, un conjunto de **desconocidos** formado por identidades de LFW con menos de 20 fotos: 195 imágenes en validación y 201 en test.
 - Los datos y las caras alineadas no se versionan (`data/` está en `.gitignore`).
 
-
 ## Notas importantes
 
 - Para usar `pgvector`, levanten `postgres` y definan `USE_PGVECTOR=true` en `.env`.
