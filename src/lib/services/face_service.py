@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from uuid import uuid4
+from insightface.model_zoo.scrfd import SCRFD
+from insightface.utils import face_align
 
 import cv2
 import numpy as np
@@ -113,7 +115,27 @@ class FaceService:
         Each box is (x1, y1, x2, y2) in pixels (InsightFace convention).
         Return a list of tuples with the coordinates of the faces detected in the image.
         """
-        raise NotImplementedError("Not implemented")
+        if self.detector is None:
+            raise RuntimeError("No hay detector cargado: configurá DETECTOR_MODEL_NAME en el .env.")
+        # self.detector es la sesión de onnxruntime de det_10g.onnx (cargada una sola vez en __init__);
+        # SCRFD de InsightFace solo la envuelve para decodificar cajas y puntos.
+        scrfd = SCRFD(session=self.detector)
+        scrfd.prepare(
+            ctx_id=0,
+            input_size=(self.det_input_size, self.det_input_size),
+            det_thresh=self.det_score_threshold,
+        )
+        detections, _ = scrfd.detect(image, max_num=0, metric="default")
+        height, width = image.shape[:2]
+        faces: list[tuple[int, int, int, int]] = []
+        for x1, y1, x2, y2, _score in detections:
+            box = self._clip_xyxy(
+                int(round(x1)), int(round(y1)), int(round(x2)), int(round(y2)), height, width
+            )
+            if min(box[2] - box[0], box[3] - box[1]) < self.min_face_size:
+                continue
+            faces.append(box)
+        return faces
 
 
     def align_face(
@@ -123,14 +145,60 @@ class FaceService:
         Crop using box (x1, y1, x2, y2) and run FaceAnalysis on the crop.
         Return an AlignedFace object.
         """
-        raise NotImplementedError("Not implemented")
+        scrfd = SCRFD(session=self.detector)
+        scrfd.prepare(
+            ctx_id=0,
+            input_size=(self.det_input_size, self.det_input_size),
+            det_thresh=self.det_score_threshold,
+        )
+        height, width = image.shape[:2]
+        x1, y1, x2, y2 = box
+        # Recorte con margen alrededor de la caja, para que el detector ubique bien los 5 puntos
+        mx = int(round((x2 - x1) * self.align_margin))
+        my = int(round((y2 - y1) * self.align_margin))
+        cx1, cy1, cx2, cy2 = self._clip_xyxy(x1 - mx, y1 - my, x2 + mx, y2 + my, height, width)
+        crop = image[cy1:cy2, cx1:cx2]
+
+        detections, kpss = scrfd.detect(crop, max_num=0, metric="default")
+        target = np.array([x1 - cx1, y1 - cy1, x2 - cx1, y2 - cy1], dtype=np.float32)
+        best, best_iou = -1, 0.0
+        for i, det in enumerate(detections):
+            iou = self._iou(target, det[:4])
+            if iou > best_iou:
+                best, best_iou = i, iou
+
+        if best >= 0 and kpss is not None:
+            # Puntos en coordenadas de la imagen original
+            kps = kpss[best] + np.array([cx1, cy1], dtype=np.float32)
+            face_img = face_align.norm_crop(image, landmark=kps, image_size=self.face_size)
+            # El frontend espera los puntos relativos a la esquina de la caja (x - x1, y - y1)
+            rel_kps = kps - np.array([x1, y1], dtype=np.float32)
+            return AlignedFace(bbox=box, keypoints=rel_kps, image=face_img)
+
+        # Sin puntos: se usa el recorte de la caja, sin alinear
+        logger.warning("No se obtuvieron puntos para la cara %s; se usa el recorte sin alinear.", box)
+        face_img = cv2.resize(image[y1:y2, x1:x2], (self.face_size, self.face_size))
+        return AlignedFace(bbox=box, keypoints=None, image=face_img)
 
     def extract_embedding_from_face(self, face: AlignedFace) -> list[float]:
         """
         Extract embedding from face.
         Return a list of floats representing the embedding of the face.
         """
-        raise NotImplementedError("Not implemented")
+        # Mismo preprocesamiento que en la notebook 2: BGR -> RGB y (x - 127.5) / 127.5 (receta de ArcFace)
+        blob = cv2.dnn.blobFromImage(
+            face.image,
+            1.0 / 127.5,
+            (self.face_size, self.face_size),
+            (127.5, 127.5, 127.5),
+            swapRB=True,
+        )
+        out = self.model.run(None, {self.model.get_inputs()[0].name: blob})[0][0]
+        out = np.asarray(out, dtype=np.float32)
+        norm = float(np.linalg.norm(out))
+        if norm > 0:
+            out = out / norm
+        return out.astype(float).tolist()
         
     def _cosine(self, a: np.ndarray, b: np.ndarray) -> float:
         denom = np.linalg.norm(a) * np.linalg.norm(b)
